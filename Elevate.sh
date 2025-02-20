@@ -64,6 +64,22 @@
 # - Removed ComputerID from PLIST, no need
 # - WebhookURL should not be stored in PLIST, it will now be removed after it is used
 #
+# Updated 07.27.2023 @robjschroeder
+# Version: 2.0.4
+# - Silenced the output of the creation of the Launch Daemon to declutter Jamf Pro policy logs (thanks @dan-snelson!)
+#
+# Updated 08.17.2023 @dan-snelson
+# Version 2.0.5
+# - Added permissions correction on `mktemp`-created files (for swiftDialog 2.3)
+#
+# Updated 08.31.2023 @robjschroeder
+# Version 2.0.6
+# - Updated the dialog download URL
+#
+# Updated 20-Feb-2025, Dan K. Snelson (@dan-snelson)
+# Version 2.0.7
+# - Updated Microsoft Teams Webhook
+#
 ##################################################
 
 ####################################################################################################
@@ -76,7 +92,7 @@
 # Script Version and Jamf Pro Script Parameters
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-scriptVersion="2.0.3"
+scriptVersion="2.0.7"
 scriptFunctionalName="Elevate"
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
@@ -103,7 +119,7 @@ webhookURL="${8:-""}"
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 # Dialog Icon
-icon="/System/Library/CoreServices/KeyboardSetupAssistant.app/Contents/Resources/AppIcon.icns"
+icon="https://ics.services.jamfcloud.com/icon/hash_7a6053ff399ed3bc1b41f37fac5b9336eab64804b71290c0299caa99c8faca01"
 
 # IT Support Variables - Use these if the default text is fine but you want your org's info inserted instead
 supportTeamName="Help Desk"
@@ -116,8 +132,6 @@ supportTeamHelpKB="\n- **Knowledge Base Article:** ${supportKB}"
 # Path to PList Buddy
 plistBuddy="/usr/libexec/PlistBuddy"
 
-# Jamf Binary
-jamfBinary="/usr/local/bin/jamf"
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Operating System, Computer Model Name, etc.
@@ -204,13 +218,13 @@ updateScriptLog "PRE-FLIGHT CHECK (${scriptFunctionalName}): Current Logged-in U
 # Pre-flight Check: Validate Operating System Version
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-# Since swiftDialog requires at least macOS 11 Big Sur, first confirm the major OS version
-if [[ "${osMajorVersion}" -ge 11 ]] ; then
+# Since swiftDialog 2.3 requires at least macOS 12 Monterey, first confirm the major OS version
+if [[ "${osMajorVersion}" -ge 12 ]] ; then
     updateScriptLog "PRE-FLIGHT CHECK (${scriptFunctionalName}): macOS ${osMajorVersion} installed; continuing ..."
 else
-    # The Mac is running an operating system older than macOS 11 Big Sur; exit with error
-    updateScriptLog "PRE-FLIGHT CHECK (${scriptFunctionalName}): swiftDialog requires at least macOS 11 Big Sur and this Mac is running ${osVersion} (${osBuild}), exiting with error."
-    osascript -e 'display dialog "Please advise your Support Representative of the following error:\r\rExpected macOS 11 Big Sur (or newer), but found macOS '"${osVersion}"'.\r\r" with title "'${scriptFunctionalName}': Detected Outdated Operating System" buttons {"Open Software Update"} with icon caution'
+    # The Mac is running an operating system older than macOS 12 Monterey; exit with error
+    updateScriptLog "PRE-FLIGHT CHECK (${scriptFunctionalName}): swiftDialog 2.3 requires at least macOS 12 Monterey and this Mac is running ${osVersion} (${osBuild}), exiting with error."
+    osascript -e 'display dialog "Please advise your Support Representative of the following error:\r\rExpected macOS 12 Monterey (or newer), but found macOS '"${osVersion}"'.\r\r" with title "'${scriptFunctionalName}': Detected Outdated Operating System" buttons {"Open Software Update"} with icon caution'
     updateScriptLog "PRE-FLIGHT CHECK (${scriptFunctionalName}): Executing /usr/bin/open '/System/Library/CoreServices/Software Update.app' …"
     su - "${loggedInUser}" -c "/usr/bin/open /System/Library/CoreServices/Software Update.app"
     exit 1
@@ -223,7 +237,7 @@ fi
 function dialogCheck() {
 
     # Get the URL of the latest PKG From the Dialog GitHub repo
-    dialogURL=$(curl --silent --fail "https://api.github.com/repos/bartreardon/swiftDialog/releases/latest" | awk -F '"' "/browser_download_url/ && /pkg\"/ { print \$4; exit }")
+    dialogURL=$(curl -L --silent --fail "https://api.github.com/repos/swiftDialog/swiftDialog/releases/latest" | awk -F '"' "/browser_download_url/ && /pkg\"/ { print \$4; exit }")
 
     # Expected Team ID of the downloaded PKG
     expectedDialogTeamID="PWA5E9TQ59"
@@ -313,7 +327,7 @@ elevateConfigProfile="/Library/Preferences/xyz.techitout.elevate.plist"
 #Exit if there is no mobileconfig payload
 managedConfig="false"
 if [ -f "$elevateManagedConfigProfile" ]; then
-	updateScriptLog "${scriptFunctionalName}: Managed Configuration Profile exists, assuming settings are set in this configuraiton profiles..."
+	updateScriptLog "${scriptFunctionalName}: Managed Configuration Profile exists, assuming settings are set in this configuration profiles..."
     managedConfig="true"
     if [ -f "$elevateConfigProfile" ]; then
         updateScriptLog "${scriptFunctionalName}: Updating ${elevateConfigProfile} with extra variables..."
@@ -472,12 +486,15 @@ dialogVersion=$( /usr/local/bin/dialog --version )
 # Set Dialog path, Command Files, JAMF binary, log files and currently logged-in user
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-dialogApp="/Library/Application\ Support/Dialog/Dialog.app/Contents/MacOS/Dialog"
-dialogBinary="/usr/local/bin/dialog"
-adminCommandFile=$( mktemp -u /var/tmp/dialogAdmin.XXX )
-promptCommandFile=$( mktemp -u /var/tmp/dialogPrompt.XXX )
-promptJSONFile=$( mktemp -u /var/tmp/promptJSONFile.XXX )
 jamfBinary="/usr/local/bin/jamf"
+dialogBinary="/usr/local/bin/dialog"
+promptJSONFile=$( mktemp /var/tmp/promptJSONFile.XXX )
+adminCommandFile=$( mktemp /var/tmp/dialogCommandFileAdmin.XXX )
+promptCommandFile=$( mktemp /var/tmp/dialogCommandFilePrompt.XXX )
+
+# Set permissions on Dialog Command Files
+chmod -v 666 "${promptJSONFile}"
+chmod -v 666 /var/tmp/dialogCommandFile*
 
 osVersion=$( sw_vers -productVersion )
 osBuild=$( sw_vers -buildVersion )
@@ -500,8 +517,8 @@ overlayicon="/var/tmp/overlayicon.icns"
 # "Prompt" dialog Title, Message and Icon
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-promptDialogTitle="Request To Elevate Access"
-promptDialogMessage="Hello ${loggedInUserFirstname}, the following must be filled out before administrative access can be given"
+promptDialogTitle="Request to Elevate Access"
+promptDialogMessage="### Happy $( date +'%A' ), ${loggedInUserFirstname}!  \nPlease provide a reason why you need to elevate your account with local administrative privileges. (Please be as specific as possible.)"
 
 promptJSON='
 {
@@ -541,9 +558,10 @@ promptJSON='
 elevationDurationSeconds=$(( ${elevationDurationMinutes} * 60 ))
 
 adminDialogTitle="Admin privileges granted, ${loggedInUserFirstname}"
-adminDialogMessage="You have been granted local administrator privileges for ${elevationDurationMinutes} minute(s).  \n\nAfter the timer below expires, your account will return to a standard user."
+adminDialogMessage="You have been granted local administrator privileges for ${elevationDurationMinutes} minute(s).  \n\nAfter the timer below expires, your account will revert to a Standard user."
 
 adminDialogCMD="$dialogBinary -p \
+--commandfile $adminCommandFile \
 --title \"$adminDialogTitle\" \
 --titlefont size=22 \
 --message \"$adminDialogMessage\" \
@@ -606,11 +624,11 @@ function captureReason () {
 # Parse JSON via osascript and JavaScript
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-function get_json_value() {
-    JSON="$1" osascript -l 'JavaScript' \
-        -e 'const env = $.NSProcessInfo.processInfo.environment.objectForKey("JSON").js' \
-        -e "JSON.parse(env).$2"
-}
+# function get_json_value() {
+#     JSON="$1" osascript -l 'JavaScript' \
+#         -e 'const env = $.NSProcessInfo.processInfo.environment.objectForKey("JSON").js' \
+#         -e "JSON.parse(env).$2"
+# }
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Parse JSON via osascript and JavaScript for the Prompt dialog (thanks, @bartreardon!)
@@ -762,16 +780,18 @@ function quitScript() {
 
 function webHookMessage() {
 
-    # # Jamf Pro URL for on-prem, multi-node, clustered environments
+    jamfProURL=$(/usr/bin/defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url)
+
+    # Jamf Pro URL for on-prem, multi-node, clustered environments
     # case ${jamfProURL} in
     #     *"beta"*    ) jamfProURL="https://jamfpro-beta.internal.company.com/" ;;
     #     *           ) jamfProURL="https://jamfpro-prod.internal.company.com/" ;;
     # esac
+
     # Run initial recon
     reconRaw=$( eval "${jamfBinary} recon -verbose | tee -a ${scriptLog}" )
     computerID=$( echo "${reconRaw}" | grep '<computer_id>' | xmllint --xpath xmllint --xpath '/computer_id/text()' - )
 
-    jamfProURL=$(/usr/bin/defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url)
     jamfProComputerURL="${jamfProURL}computers.html?id=${computerID}&o=r"
 
     if [[ $webhookURL == *"slack"* ]]; then
@@ -848,45 +868,95 @@ EOF
         updateScriptLog "Generating Microsoft Teams Message …"
 
         # URL to an image to add to your notification
-        activityImage="https://creazilla-store.fra1.digitaloceanspaces.com/cliparts/78010/old-mac-computer-clipart-md.png"
+        activityImage="https://ics.services.jamfcloud.com/icon/hash_7a6053ff399ed3bc1b41f37fac5b9336eab64804b71290c0299caa99c8faca01"
 
         webHookdata=$(cat <<EOF
-{
-    "@type": "MessageCard",
-    "@context": "http://schema.org/extensions",
-    "themeColor": "E4002B",
-    "summary": "Security: Elevate Request",
-    "sections": [{
-        "activityTitle": "Security: Elevate Request",
-        "activitySubtitle": "${jamfProURL}",
-        "activityImage": "${activityImage}",
-        "facts": [{
-            "name": "Mac Serial",
-            "value": "${serialNumber}"
-        }, {
-            "name": "Computer Name",
-            "value": "$( scutil --get ComputerName )"
-        }, {
-            "name": "User",
-            "value": "${loggedInUser}"
-        }, {
-            "name": "Operating System Version",
-            "value": "${osVersion}"
-        }, {
-            "name": "Reason",
-            "value": "${elevateReason}"
-}],
-        "markdown": true,
-        "potentialAction": [{
-        "@type": "OpenUri",
-        "name": "View in Jamf Pro",
-        "targets": [{
-        "os": "default",
-            "uri": "${jamfProComputerURL}"
-            }]
-        }]
-    }]
-}
+        {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "contentUrl": null,
+                    "content": {
+                        "type": "AdaptiveCard",
+                        "body": [
+                            {
+                                "type": "TextBlock",
+                                "size": "Large",
+                                "weight": "Bolder",
+                                "text": "Security: Elevate Request for ${loggedInUser}"
+                            },
+                            {
+                                "type": "ColumnSet",
+                                "columns": [
+                                    {
+                                        "type": "Column",
+                                        "items": [
+                                            {
+                                                "type": "Image",
+                                                "url": "https://ics.services.jamfcloud.com/icon/hash_7a6053ff399ed3bc1b41f37fac5b9336eab64804b71290c0299caa99c8faca01",
+                                                "altText": "Elevate",
+                                                "size": "Small"
+                                            }
+                                        ],
+                                        "width": "auto"
+                                    },
+                                    {
+                                        "type": "Column",
+                                        "items": [
+                                            {
+                                                "type": "TextBlock",
+                                                "weight": "Bolder",
+                                                "text": "$( scutil --get ComputerName )",
+                                                "wrap": true
+                                            },
+                                            {
+                                                "type": "TextBlock",
+                                                "spacing": "None",
+                                                "text": "${serialNumber}",
+                                                "isSubtle": true,
+                                                "wrap": true
+                                            }
+                                        ],
+                                        "width": "stretch"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "FactSet",
+                                "facts": [
+                                    {
+                                        "title": "Computer Name",
+                                        "value": "$( scutil --get ComputerName )"
+                                    },
+                                    {
+                                        "title": "User",
+                                        "value": "${loggedInUser}"
+                                    },
+                                    {
+                                        "title": "Operating System",
+                                        "value": "${osVersion} (${osBuild})"
+                                    },
+                                    {
+                                        "title": "Reason",
+                                        "value": "${elevateReason}"
+                                    }
+                                ]
+                            }
+                        ],
+                        "actions": [
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "View in Jamf Pro",
+                                "url": "${jamfProComputerURL}"
+                            }
+                        ],
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "version": "1.2"
+                    }
+                }
+            ]
+        }
 EOF
 )
 
@@ -920,7 +990,7 @@ checkIfAdmin
 
 # Display prompt dialog
 echo $promptJSON > $promptJSONFile
-promptResults=$( eval "$dialogBinary --jsonfile ${promptJSONFile} --json" )
+promptResults=$( eval "$dialogBinary --jsonfile ${promptJSONFile} --json" | sed 's/ERROR: Unable to delete command file//g' )
 
 # Evaluate User Input
 if [[ -z "${promptResults}" ]]; then
@@ -1004,7 +1074,7 @@ else
 fi
 
 # Set up the LaunchDaemon
-tee /Library/LaunchDaemons/"${plistDomain}".elevate.plist << EOF
+tee /Library/LaunchDaemons/"${plistDomain}".elevate.plist &>/dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
